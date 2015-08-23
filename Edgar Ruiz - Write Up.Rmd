@@ -1,0 +1,93 @@
+---
+title: "Machine Learning - Fitness Data"
+author: "Edgar Ruiz"
+date: "August 22, 2015"
+output: html_document
+---
+##Summary
+* Random Forest is the method selected for the analysis
+* Separated the data into 40% training/testing and 60% validation
+* Cross-validation will occur within each run of the random forest tree
+* Performed some variable pre-selection to increase training speed
+
+##Loading and partitioning data
+```{r message=FALSE}
+# Loading libraries, seeds and file in the outset -----------------------------------------------------------
+library(caret)
+set.seed(1710)
+activity <- read.csv("pml-training.csv")
+```
+
+Larger training sets were causing computer processor problems.  At 40%, the accuracy rate became acceptable.
+```{r}
+training.rows <- createDataPartition(y=activity$classe, p=0.4, list=FALSE)
+training<- activity[training.rows,]
+validate <- activity[-training.rows,]
+```
+
+##Data Processing
+### Variable pre-selection
+3 stages for pre-selection, removed variables with near zero variance, those with no correlation to any other variable, and those with not needed to train the model.
+```{r}
+# Sepparating 'classe' to prepare the rest of the variables for variable pre-selection ----------------------
+classe <- training$classe
+# Using Near Zero Variance to identify and remove -----------------------------------------------------------
+training.var <- nearZeroVar(training, saveMetrics=TRUE)
+training.nzv <-  subset(training.var, nzv==FALSE)
+training <- subset(training, select=c(rownames(training.nzv)))
+# Removed specific variables, identified during data discovery ----------------------------------------------
+training <- subset(training, select=-c( X,raw_timestamp_part_1, raw_timestamp_part_2,cvtd_timestamp, classe,user_name,num_window ))
+# Using correlation to identify and remove those variables with NA correlation ------------------------------
+training.cor <- cor(training)[1,]
+training.NA <- is.na(training.cor)
+training.cor <- training.cor[training.NA==FALSE]
+training <- subset(training, select=c(rownames(as.data.frame(training.cor))))
+training <- cbind(classe, training)
+```
+
+##Model fitting and analysis
+Used most defaults for the Random Forest method to fit the model. Due to long processing times, the number of trees were specified to 10.
+```{r message=FALSE}
+training.fit <- train(classe~., data=training, method="rf", prox=TRUE, ntree=10)
+```
+
+###Random Forest results - Cross validation and Predictor Selection
+
+```{r fig.height=4}
+ggplot(training.fit)+geom_vline(xintercept=training.fit$results$mtry, colour=c("green","red","blue"))+labs(title="Training Fit - Accuracy over # of Predictors")+geom_text(label=training.fit$results$mtry, x=training.fit$results$mtry+1, y=0.955, size=3)
+training.fit
+```
+
+* The **cross-validation** was performed using 25 repetitions of Bootstrapping, and each sample size was 7,850
+* Best number of predictors was 27, plot and summary show a decrease in Accuracy when using more predictors
+
+###Selected model - Expected error rate
+
+```{r fig.height=4}
+plot(training.fit$finalModel)
+print(training.fit$finalModel)
+```
+* The model returns and estimated **out of sample error rate** of 5.05%
+* Plot shows the **error rates decline** as the number of trees increase 
+* 27 of variables were used in the final model
+
+##Validating model
+```{r message=FALSE}
+validate.pred <- predict(training.fit, validate)
+validate.matrix <- confusionMatrix(validate.pred, validate$classe)
+validate.accuracy  <-validate.matrix$overall[1]
+validate.error <- 1-validate.accuracy
+
+print(paste("Validation sample size: ", length(validate.pred)));print(paste("Accuracy:" , round(validate.accuracy,digits=4)));print(paste("Validation error rate: " , round(validate.error,digits=4)))
+```
+* Validation returned an even lower error rate than the average out of sample error rate obtained during training
+* Likelihood of over fitting is low due to the low error rate obtained
+
+##Testing model
+Running the model against the observations in the submission data set and creating the files.
+```{r}
+submission <- read.csv("pml-testing.csv")
+submission.rf <- predict(training.fit, submission)
+for(i in 1:length(submission.rf)){write.table(submission.rf[i], file=paste("problem_id_",i,".txt"),quote=FALSE,row.names=FALSE,col.names=FALSE)}
+```
+The model accurately solved for all 20 of the problems, once the resulting files were uploaded.
